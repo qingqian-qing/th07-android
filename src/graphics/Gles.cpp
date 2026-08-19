@@ -1000,7 +1000,17 @@ static void EnsureButtonFont()
         return;
     }
 
-    s_btnFont = TTF_OpenFont(FileSystem::GetBasePath("msgothic.ttc").c_str(), 48);
+    // Prefer the bundled simplified-Chinese font (APK assets); fall back to
+    // msgothic.ttc in the external data dir.
+    SDL_IOStream *nsIo = SDL_IOFromFile("NotoSansSC-Regular.otf", "rb");
+    if (nsIo)
+    {
+        s_btnFont = TTF_OpenFontIO(nsIo, true, 48);
+    }
+    if (!s_btnFont)
+    {
+        s_btnFont = TTF_OpenFont(FileSystem::GetBasePath("msgothic.ttc").c_str(), 48);
+    }
     if (!s_btnFont)
     {
         Supervisor::DebugPrint("btnfont: TTF_OpenFont fail : %s\n", SDL_GetError());
@@ -1244,22 +1254,40 @@ void GlesGraphics::DrawPracticeMenu(i32 rw, i32 rh, i32 offsetX, i32 offsetY, i3
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
-    // thin border
+    // thin border: full rectangle (4 edge strips)
     {
-        f32 q[4 * 8];
-        f32 *v = q;
         const f32 br = 0.5f, bg = 0.6f, bb = 0.8f, ba = 0.9f;
+        const f32 bw = 1.5f; // border thickness (screen px)
+        f32 q[4 * 8];
+        // top
+        f32 *v = q;
         v[0]=px0; v[1]=py0; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
         v[0]=px1; v[1]=py0; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
-        v[0]=px0; v[1]=py0+1.5f; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
-        v[0]=px1; v[1]=py0+1.5f; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0;
+        v[0]=px0; v[1]=py0+bw; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px1; v[1]=py0+bw; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0;
         glBufferData(GL_ARRAY_BUFFER, 4 * 8 * sizeof(f32), q, GL_STREAM_DRAW);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        // bottom border
+        // bottom
         v = q;
-        v[0]=px0; v[1]=py1-1.5f; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
-        v[0]=px1; v[1]=py1-1.5f; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px0; v[1]=py1-bw; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px1; v[1]=py1-bw; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
         v[0]=px0; v[1]=py1; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px1; v[1]=py1; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0;
+        glBufferData(GL_ARRAY_BUFFER, 4 * 8 * sizeof(f32), q, GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        // left
+        v = q;
+        v[0]=px0; v[1]=py0; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px0+bw; v[1]=py0; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px0; v[1]=py1; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px0+bw; v[1]=py1; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0;
+        glBufferData(GL_ARRAY_BUFFER, 4 * 8 * sizeof(f32), q, GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        // right
+        v = q;
+        v[0]=px1-bw; v[1]=py0; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px1; v[1]=py0; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px1-bw; v[1]=py1; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
         v[0]=px1; v[1]=py1; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0;
         glBufferData(GL_ARRAY_BUFFER, 4 * 8 * sizeof(f32), q, GL_STREAM_DRAW);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);

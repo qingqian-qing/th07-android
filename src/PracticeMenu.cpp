@@ -21,10 +21,11 @@ static constexpr f32 kOpenBtnRadius = 24.0f;
 static constexpr f32 kOpenBtnHitRadius = 36.0f;
 static constexpr f32 kOpenBtnGameX = 640.0f + kOpenBtnRadius; // right pillarbox center
 
-// Panel: game-area coords (640x480), left side.
+// Panel: bottom pillarbox (below the 640x480 game area, gy 480+) so it
+// never covers gameplay.
 static constexpr f32 kPanelX = 12.0f;
 static constexpr f32 kPanelW = 216.0f;
-static constexpr f32 kPanelTop = 14.0f;
+static constexpr f32 kPanelTop = 492.0f;
 static constexpr f32 kRowH = 34.0f;
 static constexpr f32 kRowHitH = 38.0f;
 
