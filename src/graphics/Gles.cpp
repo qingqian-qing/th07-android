@@ -956,10 +956,19 @@ void GlesGraphics::DrawPrimitiveUP(PrimitiveType type, i32 primitiveCount, const
 // ────────────────────────────────────────────────────────────────────────────
 
 static TTF_Font *s_btnFont = nullptr;
-static GLuint s_btnLabelTex[6] = {0};
-static i32 s_btnLabelW[6] = {0};
-static i32 s_btnLabelH[6] = {0};
+static GLuint s_btnLabelTex[15] = {0};
+static i32 s_btnLabelW[15] = {0};
+static i32 s_btnLabelH[15] = {0};
 static bool s_btnLabelsReady = false;
+
+// Texture index map:
+//   0 ESC 1 Z 2 S 3 X 4 < 5 > | 6 PRAC | 7..12 practice rows | 13 ON 14 OFF
+static const char *kLabelTexNames[15] = {
+    "ESC", "Z", "S", "X", "<", ">",
+    "PRAC",
+    "无敌", "锁残", "无限符卡", "锁火力", "自动符卡", "第2套触控",
+    "ON", "OFF",
+};
 
 static i32 LabelToTexIndex(const char *label)
 {
@@ -967,12 +976,13 @@ static i32 LabelToTexIndex(const char *label)
     {
         return -1;
     }
-    if (label[0] == 'E') return 0; // ESC
-    if (label[0] == 'Z') return 1;
-    if (label[0] == 'S') return 2;
-    if (label[0] == 'X') return 3;
-    if (label[0] == '<') return 4;
-    if (label[0] == '>') return 5;
+    for (i32 i = 0; i < 15; i++)
+    {
+        if (std::strcmp(kLabelTexNames[i], label) == 0)
+        {
+            return i;
+        }
+    }
     return -1;
 }
 
@@ -998,12 +1008,11 @@ static void EnsureButtonFont()
     }
     TTF_SetFontStyle(s_btnFont, TTF_STYLE_BOLD);
 
-    const char *labels[6] = {"ESC", "Z", "S", "X", "<", ">"};
     SDL_Color white = {255, 255, 255, 255};
 
-    for (i32 i = 0; i < 6; i++)
+    for (i32 i = 0; i < 15; i++)
     {
-        SDL_Surface *surf = TTF_RenderText_Blended(s_btnFont, labels[i], 0, white);
+        SDL_Surface *surf = TTF_RenderText_Blended(s_btnFont, kLabelTexNames[i], 0, white);
         if (surf == nullptr)
         {
             continue;
@@ -1090,6 +1099,219 @@ void GlesGraphics::DrawButtonLabels(const TouchButtons::ButtonInfo *buttons, i32
         glBindTexture(GL_TEXTURE_2D, s_btnLabelTex[ti]);
         glBufferData(GL_ARRAY_BUFFER, 4 * 8 * sizeof(f32), verts, GL_STREAM_DRAW);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+}
+
+// Draws the practice menu: the "PRAC" open button on the right pillarbox and,
+// when open, a translucent panel with feature rows. Runs inside
+// DrawScreenSpaceButtons() while the button shader/state is active.
+void GlesGraphics::DrawPracticeMenu(i32 rw, i32 rh, i32 offsetX, i32 offsetY, i32 scaledH)
+{
+    PracticeMenu::OpenButtonInfo ob;
+    if (!PracticeMenu::GetOpenButtonInfo(&ob))
+    {
+        return;
+    }
+
+    constexpr f32 kPi = 3.14159265358979323846f;
+    constexpr i32 kHalfSegs = 16;
+    constexpr f32 kBorderW = 2.0f;
+    const f32 yScale = (f32)scaledH / 480.0f;
+
+    // ── Open button (right pillarbox circle) ──
+    {
+        const f32 sy = offsetY + (ob.gameY / 480.0f) * scaledH;
+        const f32 sr = ob.gameRadius * yScale;
+        f32 sx = (f32)(rw - offsetX) + sr;
+        if (sx > (f32)rw - sr)
+        {
+            sx = (f32)rw - sr;
+        }
+
+        const f32 fillR = ob.held ? 0.62f : 0.36f;
+        const f32 fillG = ob.held ? 0.72f : 0.42f;
+        const f32 fillB = ob.held ? 0.85f : 0.55f;
+        const f32 fillA = 0.72f;
+
+        glUniform1i(this->btn_u_UseTex, 0);
+
+        f32 verts[33 * 2 * 8];
+
+        // filled circle
+        {
+            i32 nv = (kHalfSegs + 1) * 2;
+            for (i32 j = 0; j <= kHalfSegs; j++)
+            {
+                f32 ang = kPi * 0.5f - j * kPi / (f32)kHalfSegs;
+                f32 ca = cosf(ang), sa = sinf(ang);
+                f32 *L = verts + (j * 2) * 8;
+                L[0] = sx - sr * ca; L[1] = sy - sr * sa;
+                L[2] = fillR; L[3] = fillG; L[4] = fillB; L[5] = fillA;
+                L[6] = 0; L[7] = 0;
+                f32 *R = verts + (j * 2 + 1) * 8;
+                R[0] = sx + sr * ca; R[1] = sy - sr * sa;
+                R[2] = fillR; R[3] = fillG; R[4] = fillB; R[5] = fillA;
+                R[6] = 0; R[7] = 0;
+            }
+            glBufferData(GL_ARRAY_BUFFER, nv * 8 * sizeof(f32), verts, GL_STREAM_DRAW);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, nv);
+        }
+
+        // border ring
+        {
+            i32 segs = kHalfSegs * 2;
+            i32 nv = (segs + 1) * 2;
+            f32 innerR = sr - kBorderW;
+            if (innerR < 1.0f)
+            {
+                innerR = 1.0f;
+            }
+            for (i32 j = 0; j <= segs; j++)
+            {
+                f32 ang = j * 2.0f * kPi / (f32)segs;
+                f32 ca = cosf(ang), sa = sinf(ang);
+                f32 *O = verts + (j * 2) * 8;
+                O[0] = sx + sr * ca; O[1] = sy + sr * sa;
+                O[2] = 1.0f; O[3] = 1.0f; O[4] = 1.0f; O[5] = 0.85f;
+                O[6] = 0; O[7] = 0;
+                f32 *I = verts + (j * 2 + 1) * 8;
+                I[0] = sx + innerR * ca; I[1] = sy + innerR * sa;
+                I[2] = 1.0f; I[3] = 1.0f; I[4] = 1.0f; I[5] = 0.85f;
+                I[6] = 0; I[7] = 0;
+            }
+            glBufferData(GL_ARRAY_BUFFER, nv * 8 * sizeof(f32), verts, GL_STREAM_DRAW);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, nv);
+        }
+
+        // "PRAC" label
+        i32 ti = LabelToTexIndex("PRAC");
+        if (ti >= 0 && s_btnLabelTex[ti] != 0)
+        {
+            glUniform1i(this->btn_u_UseTex, 1);
+            glActiveTexture(GL_TEXTURE0);
+            glUniform1i(this->btn_u_Tex, 0);
+            glBindTexture(GL_TEXTURE_2D, s_btnLabelTex[ti]);
+            const f32 th = sr * 0.85f;
+            const f32 tw = th * (f32)s_btnLabelW[ti] / (f32)s_btnLabelH[ti];
+            const f32 x0 = sx - tw * 0.5f, y0 = sy - th * 0.5f;
+            f32 q[4 * 8];
+            f32 *v = q;
+            v[0]=x0; v[1]=y0; v[2]=1; v[3]=1; v[4]=1; v[5]=1; v[6]=0; v[7]=0; v += 8;
+            v[0]=x0+tw; v[1]=y0; v[2]=1; v[3]=1; v[4]=1; v[5]=1; v[6]=1; v[7]=0; v += 8;
+            v[0]=x0; v[1]=y0+th; v[2]=1; v[3]=1; v[4]=1; v[5]=1; v[6]=0; v[7]=1; v += 8;
+            v[0]=x0+tw; v[1]=y0+th; v[2]=1; v[3]=1; v[4]=1; v[5]=1; v[6]=1; v[7]=1;
+            glBufferData(GL_ARRAY_BUFFER, 4 * 8 * sizeof(f32), q, GL_STREAM_DRAW);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        }
+    }
+
+    // ── Practice panel ──
+    if (!PracticeMenu::IsPanelOpen())
+    {
+        return;
+    }
+
+    PracticeMenu::PanelItemInfo items[8];
+    i32 count = PracticeMenu::GetPanelItems(items, 8);
+    if (count <= 0)
+    {
+        return;
+    }
+
+    constexpr f32 kPanelGameX = 12.0f;
+    constexpr f32 kPanelGameY = 14.0f;
+    constexpr f32 kPanelGameW = 216.0f;
+    constexpr f32 kRowGameH = 34.0f;
+    const f32 panelGameH = count * kRowGameH;
+
+    const f32 px0 = offsetX + kPanelGameX * yScale;
+    const f32 py0 = offsetY + kPanelGameY * yScale;
+    const f32 px1 = offsetX + (kPanelGameX + kPanelGameW) * yScale;
+    const f32 py1 = offsetY + (kPanelGameY + panelGameH) * yScale;
+
+    glUniform1i(this->btn_u_UseTex, 0);
+
+    // translucent dark background (two triangles)
+    {
+        f32 q[4 * 8];
+        f32 *v = q;
+        // top-left, top-right, bottom-left, bottom-right
+        v[0]=px0; v[1]=py0; v[2]=0.06f; v[3]=0.06f; v[4]=0.10f; v[5]=0.80f; v[6]=0; v[7]=0; v += 8;
+        v[0]=px1; v[1]=py0; v[2]=0.06f; v[3]=0.06f; v[4]=0.10f; v[5]=0.80f; v[6]=0; v[7]=0; v += 8;
+        v[0]=px0; v[1]=py1; v[2]=0.06f; v[3]=0.06f; v[4]=0.10f; v[5]=0.80f; v[6]=0; v[7]=0; v += 8;
+        v[0]=px1; v[1]=py1; v[2]=0.06f; v[3]=0.06f; v[4]=0.10f; v[5]=0.80f; v[6]=0; v[7]=0;
+        glBufferData(GL_ARRAY_BUFFER, 4 * 8 * sizeof(f32), q, GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+
+    // thin border
+    {
+        f32 q[4 * 8];
+        f32 *v = q;
+        const f32 br = 0.5f, bg = 0.6f, bb = 0.8f, ba = 0.9f;
+        v[0]=px0; v[1]=py0; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px1; v[1]=py0; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px0; v[1]=py0+1.5f; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px1; v[1]=py0+1.5f; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0;
+        glBufferData(GL_ARRAY_BUFFER, 4 * 8 * sizeof(f32), q, GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        // bottom border
+        v = q;
+        v[0]=px0; v[1]=py1-1.5f; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px1; v[1]=py1-1.5f; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px0; v[1]=py1; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0; v += 8;
+        v[0]=px1; v[1]=py1; v[2]=br; v[3]=bg; v[4]=bb; v[5]=ba; v[6]=0; v[7]=0;
+        glBufferData(GL_ARRAY_BUFFER, 4 * 8 * sizeof(f32), q, GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+
+    // rows: label (left) + ON/OFF (right)
+    glUniform1i(this->btn_u_UseTex, 1);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1i(this->btn_u_Tex, 0);
+    for (i32 i = 0; i < count; i++)
+    {
+        const f32 rowGameY = items[i].gameY;
+        const f32 sy = offsetY + (rowGameY / 480.0f) * scaledH;
+
+        const f32 textH = 22.0f * yScale;
+
+        i32 li = LabelToTexIndex(items[i].label);
+        if (li >= 0 && s_btnLabelTex[li] != 0)
+        {
+            glBindTexture(GL_TEXTURE_2D, s_btnLabelTex[li]);
+            const f32 lh = textH;
+            const f32 lw = lh * (f32)s_btnLabelW[li] / (f32)s_btnLabelH[li];
+            const f32 x0 = px0 + 10.0f * yScale;
+            const f32 y0 = sy - lh * 0.5f;
+            f32 q[4 * 8];
+            f32 *v = q;
+            v[0]=x0; v[1]=y0; v[2]=1; v[3]=1; v[4]=1; v[5]=1; v[6]=0; v[7]=0; v += 8;
+            v[0]=x0+lw; v[1]=y0; v[2]=1; v[3]=1; v[4]=1; v[5]=1; v[6]=1; v[7]=0; v += 8;
+            v[0]=x0; v[1]=y0+lh; v[2]=1; v[3]=1; v[4]=1; v[5]=1; v[6]=0; v[7]=1; v += 8;
+            v[0]=x0+lw; v[1]=y0+lh; v[2]=1; v[3]=1; v[4]=1; v[5]=1; v[6]=1; v[7]=1;
+            glBufferData(GL_ARRAY_BUFFER, 4 * 8 * sizeof(f32), q, GL_STREAM_DRAW);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        }
+
+        const char *state = items[i].enabled ? "ON" : "OFF";
+        i32 si = LabelToTexIndex(state);
+        if (si >= 0 && s_btnLabelTex[si] != 0)
+        {
+            glBindTexture(GL_TEXTURE_2D, s_btnLabelTex[si]);
+            const f32 sh = textH * 0.8f;
+            const f32 sw = sh * (f32)s_btnLabelW[si] / (f32)s_btnLabelH[si];
+            const f32 x1 = px1 - 10.0f * yScale;
+            const f32 y0 = sy - sh * 0.5f;
+            f32 q[4 * 8];
+            f32 *v = q;
+            v[0]=x1-sw; v[1]=y0; v[2]=1; v[3]=1; v[4]=1; v[5]=1; v[6]=0; v[7]=0; v += 8;
+            v[0]=x1; v[1]=y0; v[2]=1; v[3]=1; v[4]=1; v[5]=1; v[6]=1; v[7]=0; v += 8;
+            v[0]=x1-sw; v[1]=y0+sh; v[2]=1; v[3]=1; v[4]=1; v[5]=1; v[6]=0; v[7]=1; v += 8;
+            v[0]=x1; v[1]=y0+sh; v[2]=1; v[3]=1; v[4]=1; v[5]=1; v[6]=1; v[7]=1;
+            glBufferData(GL_ARRAY_BUFFER, 4 * 8 * sizeof(f32), q, GL_STREAM_DRAW);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        }
     }
 }
 
@@ -1259,6 +1481,8 @@ void GlesGraphics::DrawScreenSpaceButtons()
     }
 
     DrawButtonLabels(buttons, count, rw, offsetX, offsetY, scaledH);
+
+    DrawPracticeMenu(rw, rh, offsetX, offsetY, scaledH);
 
     // ---- restore GL state ----
     glBindVertexArray(0);

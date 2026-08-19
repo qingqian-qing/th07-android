@@ -17,6 +17,7 @@
 
 #include "AnmManager.hpp"
 #include "TouchButtons.hpp"
+#include "PracticeMenu.hpp"
 #include "ZunGraphics.hpp"
 
 struct CachedState
@@ -165,6 +166,7 @@ class GlesGraphics : public ZunGraphics
     void DrawScreenSpaceButtons();
     void DrawButtonLabels(const TouchButtons::ButtonInfo *buttons, i32 count, i32 rw,
                           i32 offsetX, i32 offsetY, i32 scaledH);
+    void DrawPracticeMenu(i32 rw, i32 rh, i32 offsetX, i32 offsetY, i32 scaledH);
 
     void Flush()
     {

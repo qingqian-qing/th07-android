@@ -1,4 +1,5 @@
 #include "Player.hpp"
+#include "PracticeMenu.hpp"
 
 #include "AnmIdx.hpp"
 #include "AnmManager.hpp"
@@ -1189,6 +1190,41 @@ void Player::ScoreGraze(ZunVec3 *param_1)
 
 void Player::Die()
 {
+    // Practice menu: Muteki - ignore death entirely.
+    if (PracticeMenu::IsEnabled(PracticeMenu::FEAT_MUTEKI))
+    {
+        return;
+    }
+
+    // Practice menu: AutoBomb - spend a bomb the instant the player is hit
+    // (same bomb start logic as a manual bomb / deathbomb).
+    if (PracticeMenu::IsEnabled(PracticeMenu::FEAT_AUTOBOMB) &&
+        (i32)g_GameManager.globals->bombsRemaining > 0)
+    {
+        g_ReplayManager->replayEventFlags |= 1;
+        g_GameManager.AddBombsUsed(1);
+        g_GameManager.AddBombsRemaining(-1);
+        g_Gui.bombDisplayUpdateFrames = 2;
+        this->bombInfo.isFocus = (i32)this->isFocus;
+        this->bombInfo.isInUse = 1;
+        this->isBombing = 1;
+        this->bombInfo.bombTimer = 0;
+        this->bombInfo.bombDuration = 999;
+        if (!this->bombInfo.isFocus)
+        {
+            this->bombInfo.bombCalc(this);
+        }
+        else
+        {
+            this->bombInfo.bombFocusCalc(this);
+        }
+        g_EnemyManager.spellcardInfo.captureScore = 0;
+        g_EnemyManager.spellcardInfo.isCapturing = 0;
+        g_GameManager.DecreaseSubrank(200);
+        this->invulnerabilityTimer = 120; // safety net during the bomb
+        return;
+    }
+
     g_GameManager.RegenerateGameIntegrityCsum();
     g_EffectManager.SpawnEffect(12, &this->positionCenter, 3, 1, 0xff4040ff);
     g_EffectManager.SpawnParticles(6, &this->positionCenter, 16, 0xffffffff);
@@ -1336,8 +1372,13 @@ i32 Player::HandlePlayerInputs()
 
     if (Touch::GetPlayerDelta(&touchDx, &touchDy))
     {
+        // Practice menu: th06-style touch keeps 1:1 finger mapping (no focus
+        // slowdown, no speed cap). Original behaviour otherwise.
+        const bool th06StyleTouch = PracticeMenu::IsTouchScheme2();
+
         f32 focusRatio = 1.0f;
-        if (this->isFocus && this->shooterData && this->shooterData->speed != 0.0f)
+        if (!th06StyleTouch && this->isFocus && this->shooterData &&
+            this->shooterData->speed != 0.0f)
         {
             focusRatio = this->shooterData->speedFocus / this->shooterData->speed;
         }
@@ -1390,6 +1431,10 @@ i32 Player::HandlePlayerInputs()
                              requestedVerticalSpeed * requestedVerticalSpeed;
 
         f32 maxSpeed = this->isFocus ? this->shooterData->speedFocus : this->shooterData->speed;
+        if (th06StyleTouch)
+        {
+            maxSpeed = 100000.0f; // uncapped 1:1 (th06-sdl2 style)
+        }
 
         if (currentSpeedSq > maxSpeed * maxSpeed && currentSpeedSq > 0.0f)
         {
@@ -1969,6 +2014,15 @@ i32 Player::UpdateDeath()
             g_AnmManager->SetAnmIdxAndExecuteScript(&this->playerSprite, 1024);
             if ((i32)g_GameManager.globals->livesRemaining <= 0)
             {
+                // Practice menu: lock lives - no lives left but keep playing
+                // (no retry/continue screen).
+                if (PracticeMenu::IsEnabled(PracticeMenu::FEAT_LOCK_LIVES))
+                {
+                    g_Gui.lifeDisplayUpdateFrames = 2;
+                    g_GameManager.SetBombsRemainingAndComputeCsum(g_Player.shooterData->initialBombs);
+                    g_Gui.bombDisplayUpdateFrames = 2;
+                    return 1;
+                }
                 g_GameManager.isInRetryMenu = 1;
             }
             else

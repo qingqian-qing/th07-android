@@ -1,6 +1,7 @@
 #include "Touch.hpp"
 
 #include "TouchButtons.hpp"
+#include "PracticeMenu.hpp"
 
 #include <SDL3/SDL_events.h>
 #include <cmath>
@@ -233,6 +234,10 @@ void Touch::FingerDown(const SDL_TouchFingerEvent &f)
     {
         return;
     }
+    if (PracticeMenu::HandleFingerDown(f.fingerID, gx, gy))
+    {
+        return;
+    }
 
     if (!IsGameplayTouchMode())
     {
@@ -292,6 +297,10 @@ void Touch::FingerUp(const SDL_TouchFingerEvent &f)
     FingerToWindowPx(f, &px, &py);
 
     if (TouchButtons::HandleFingerUp(f.fingerID))
+    {
+        return;
+    }
+    if (PracticeMenu::HandleFingerUp(f.fingerID))
     {
         return;
     }
@@ -402,6 +411,8 @@ u16 Touch::GetButtonBits()
     u16 buttons = 0;
 
     g_BombedWithTouch = false;
+
+    PracticeMenu::Update();
 
     if (!IsGameplayTouchMode())
     {
