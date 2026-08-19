@@ -48,6 +48,11 @@ bool g_BombPending = false;
 bool g_PausePending = false;
 bool g_BombedWithTouch = false;
 
+// For two-finger tap (bomb) detection: where/when the focus finger landed.
+f32 g_FocusStartX = 0.0f;
+f32 g_FocusStartY = 0.0f;
+u64 g_FocusStartMs = 0;
+
 bool IsGameplayTouchMode()
 {
     return g_GameManager.notInMenu && !g_GameManager.isInPauseMenu &&
@@ -99,22 +104,6 @@ f32 GetSwipeThreshold()
     i32 winW, winH;
     GetWindowSize(&winW, &winH);
     return (f32)winH * 0.05f;
-}
-
-bool IsBombZone(f32 px, f32 py)
-{
-    i32 winW, winH;
-    GetWindowSize(&winW, &winH);
-
-    f32 rx, ry, rw, rh, scale;
-    GetContainedRenderRect(&rx, &ry, &rw, &rh, &scale);
-
-    if (rx > 1.0f && (px < rx || px > (f32)winW - rx))
-    {
-        return true;
-    }
-
-    return px < (f32)winW * 0.15f && py > (f32)winH * 0.85f;
 }
 
 bool IsFinger(const FingerSlot &slot, SDL_FingerID id)
@@ -244,13 +233,6 @@ void Touch::FingerDown(const SDL_TouchFingerEvent &f)
             return;
         }
 
-        if (IsBombZone(px, py))
-        {
-            g_BombPending = true;
-            g_UsedThisRun = true;
-            return;
-        }
-
         AddGameplayFinger(f.fingerID);
         if (g_NumActiveGameplayFingers >= 4)
         {
@@ -279,6 +261,9 @@ void Touch::FingerDown(const SDL_TouchFingerEvent &f)
         if (!g_FocusFinger.active && f.fingerID != g_MoveFinger.id)
         {
             AssignFinger(&g_FocusFinger, f.fingerID, px, py);
+            g_FocusStartX = px;
+            g_FocusStartY = py;
+            g_FocusStartMs = SDL_GetTicks();
             g_UsedThisRun = true;
             return;
         }
@@ -327,6 +312,19 @@ void Touch::FingerUp(const SDL_TouchFingerEvent &f)
         }
         if (IsFinger(g_FocusFinger, f.fingerID))
         {
+            // Two-finger tap: focus finger lifted quickly (<500ms) with little
+            // movement while at most the move finger remains down -> bomb.
+            // Holding it longer is focus, not bomb.
+            u64 held = SDL_GetTicks() - g_FocusStartMs;
+            f32 fdx = px - g_FocusStartX;
+            f32 fdy = py - g_FocusStartY;
+            if (held < 500 && g_NumActiveGameplayFingers <= 1 &&
+                std::abs(fdx) <= GetSwipeThreshold() &&
+                std::abs(fdy) <= GetSwipeThreshold())
+            {
+                g_BombPending = true;
+                g_UsedThisRun = true;
+            }
             ReleaseFinger(&g_FocusFinger);
         }
     }
