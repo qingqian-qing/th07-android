@@ -1,5 +1,7 @@
 #include "Touch.hpp"
 
+#include "TouchButtons.hpp"
+
 #include <SDL3/SDL_events.h>
 #include <cmath>
 
@@ -45,7 +47,6 @@ SDL_FingerID g_ActiveGameplayFingerIds[10];
 i32 g_NumActiveGameplayFingers = 0;
 
 bool g_BombPending = false;
-bool g_PausePending = false;
 bool g_BombedWithTouch = false;
 
 // For two-finger tap (bomb) detection: where/when the focus finger landed.
@@ -97,6 +98,24 @@ void FingerToWindowPx(const SDL_TouchFingerEvent &f, f32 *px, f32 *py)
 
     *px = f.x * (f32)winW;
     *py = f.y * (f32)winH;
+}
+
+// Window pixel -> game coordinates (X<0 = left pillarbox, X>640 = right pillarbox).
+void WindowPxToGame(f32 px, f32 py, f32 *gx, f32 *gy)
+{
+    f32 rx, ry, rw, rh, scale;
+    GetContainedRenderRect(&rx, &ry, &rw, &rh, &scale);
+
+    if (scale > 0.0f)
+    {
+        *gx = (px - rx) / scale;
+        *gy = (py - ry) / scale;
+    }
+    else
+    {
+        *gx = px;
+        *gy = py;
+    }
 }
 
 f32 GetSwipeThreshold()
@@ -199,7 +218,6 @@ void Touch::CancelTouches()
     g_AccumDy = 0.0f;
 
     ClearGameplayFingers();
-    g_PausePending = false;
     g_BombPending = false;
     g_BombedWithTouch = false;
 }
@@ -208,6 +226,13 @@ void Touch::FingerDown(const SDL_TouchFingerEvent &f)
 {
     f32 px, py;
     FingerToWindowPx(f, &px, &py);
+
+    f32 gx, gy;
+    WindowPxToGame(px, py, &gx, &gy);
+    if (TouchButtons::HandleFingerDown(f.fingerID, gx, gy))
+    {
+        return;
+    }
 
     if (!IsGameplayTouchMode())
     {
@@ -228,16 +253,7 @@ void Touch::FingerDown(const SDL_TouchFingerEvent &f)
     }
     else
     {
-        if (g_PausePending)
-        {
-            return;
-        }
-
         AddGameplayFinger(f.fingerID);
-        if (g_NumActiveGameplayFingers >= 4)
-        {
-            g_PausePending = true;
-        }
 
         if (g_Gui.HasCurrentMsgIdx() && !g_DialogueHoldFinger.active)
         {
@@ -274,6 +290,11 @@ void Touch::FingerUp(const SDL_TouchFingerEvent &f)
 {
     f32 px, py;
     FingerToWindowPx(f, &px, &py);
+
+    if (TouchButtons::HandleFingerUp(f.fingerID))
+    {
+        return;
+    }
 
     if (!IsGameplayTouchMode())
     {
@@ -429,17 +450,6 @@ u16 Touch::GetButtonBits()
         }
     }
 
-    // keep firing for a bit after release
-    if (g_MoveFinger.active || SDL_GetTicks() - g_MoveFinger.end < 200)
-    {
-        buttons |= TH_BUTTON_SHOOT;
-    }
-
-    if (g_FocusFinger.active)
-    {
-        buttons |= TH_BUTTON_FOCUS;
-    }
-
     if (g_BombPending)
     {
         buttons |= TH_BUTTON_BOMB;
@@ -447,11 +457,7 @@ u16 Touch::GetButtonBits()
         g_BombedWithTouch = true;
     }
 
-    if (g_PausePending)
-    {
-        buttons |= TH_BUTTON_MENU;
-        Touch::CancelTouches();
-    }
+    buttons |= TouchButtons::GetButtonFlags();
 
     return buttons;
 }

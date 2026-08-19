@@ -1,13 +1,19 @@
 #include "Gles.hpp"
 
 #include <SDL3/SDL_error.h>
+#include <SDL3/SDL_surface.h>
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
+#include <SDL3_ttf/SDL_ttf.h>
+#include <cmath>
 #include <cstddef>
+#include <cstring>
 
 #include "AnmManager.hpp"
+#include "FileSystem.hpp"
 #include "GameWindow.hpp"
 #include "Supervisor.hpp"
+#include "TouchButtons.hpp"
 
 #ifdef USING_GL
 #define GLSL_VERSION "#version 330 core\n"
@@ -18,6 +24,42 @@
 #endif
 
 // clang-format off
+
+// Screen-space virtual button overlay shaders (independent of the game
+// shader; vertex colors are straight RGBA, no .bgra swizzle).
+const char *buttonVSSource =
+    GLSL_VERSION
+    "layout(location = 0) in vec2 a_Pos;\n"
+    "layout(location = 1) in vec4 a_Color;\n"
+    "layout(location = 2) in vec2 a_UV;\n"
+    "uniform vec2 u_ScreenSize;\n"
+    "out vec4 v_Color;\n"
+    "out vec2 v_UV;\n"
+    "void main() {\n"
+    "    vec2 ndc = vec2(a_Pos.x / u_ScreenSize.x * 2.0 - 1.0,\n"
+    "                    1.0 - a_Pos.y / u_ScreenSize.y * 2.0);\n"
+    "    gl_Position = vec4(ndc, 0.0, 1.0);\n"
+    "    v_Color = a_Color;\n"
+    "    v_UV = a_UV;\n"
+    "}\n";
+
+const char *buttonFSSource =
+    GLSL_VERSION
+    GLSL_PRECISION
+    "in vec4 v_Color;\n"
+    "in vec2 v_UV;\n"
+    "uniform sampler2D u_Tex;\n"
+    "uniform bool u_UseTex;\n"
+    "out vec4 FragColor;\n"
+    "void main() {\n"
+    "    if (u_UseTex) {\n"
+    "        vec4 tex = texture(u_Tex, v_UV);\n"
+    "        FragColor = vec4(v_Color.rgb, v_Color.a * tex.a);\n"
+    "    } else {\n"
+    "        FragColor = v_Color;\n"
+    "    }\n"
+    "}\n";
+
 const char *vertexShaderSource =
     GLSL_VERSION
     "uniform mat4 u_Model;\n"
@@ -305,6 +347,23 @@ ZunGraphics *GlesGraphics::Init()
     glBindVertexArray(0);
 
     glGenVertexArrays(1, &gfx->blitVao);
+
+    u32 btnVS = CompileShader(GL_VERTEX_SHADER, buttonVSSource);
+    u32 btnFS = CompileShader(GL_FRAGMENT_SHADER, buttonFSSource);
+    if (btnVS != 0 && btnFS != 0)
+    {
+        gfx->btnShaderProgram = glCreateProgram();
+        glAttachShader(gfx->btnShaderProgram, btnVS);
+        glAttachShader(gfx->btnShaderProgram, btnFS);
+        glLinkProgram(gfx->btnShaderProgram);
+        glDeleteShader(btnVS);
+        glDeleteShader(btnFS);
+        gfx->btn_u_ScreenSize = glGetUniformLocation(gfx->btnShaderProgram, "u_ScreenSize");
+        gfx->btn_u_Tex = glGetUniformLocation(gfx->btnShaderProgram, "u_Tex");
+        gfx->btn_u_UseTex = glGetUniformLocation(gfx->btnShaderProgram, "u_UseTex");
+    }
+    glGenVertexArrays(1, &gfx->btnVao);
+    glGenBuffers(1, &gfx->btnVbo);
 
     for (i32 i = 0; i < 4; i++)
     {
@@ -892,6 +951,359 @@ void GlesGraphics::DrawPrimitiveUP(PrimitiveType type, i32 primitiveCount, const
     glDrawArrays(glMode, firstVertex, vertexCount);
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Screen-space virtual button overlay (th06-style circular buttons, no ImGui)
+// ────────────────────────────────────────────────────────────────────────────
+
+static TTF_Font *s_btnFont = nullptr;
+static GLuint s_btnLabelTex[6] = {0};
+static i32 s_btnLabelW[6] = {0};
+static i32 s_btnLabelH[6] = {0};
+static bool s_btnLabelsReady = false;
+
+static i32 LabelToTexIndex(const char *label)
+{
+    if (label == nullptr)
+    {
+        return -1;
+    }
+    if (label[0] == 'E') return 0; // ESC
+    if (label[0] == 'Z') return 1;
+    if (label[0] == 'S') return 2;
+    if (label[0] == 'X') return 3;
+    if (label[0] == '<') return 4;
+    if (label[0] == '>') return 5;
+    return -1;
+}
+
+static void EnsureButtonFont()
+{
+    if (s_btnLabelsReady)
+    {
+        return;
+    }
+    s_btnLabelsReady = true; // try only once
+
+    if (!TTF_Init())
+    {
+        Supervisor::DebugPrint("btnfont: TTF_Init fail : %s\n", SDL_GetError());
+        return;
+    }
+
+    s_btnFont = TTF_OpenFont(FileSystem::GetBasePath("msgothic.ttc").c_str(), 48);
+    if (!s_btnFont)
+    {
+        Supervisor::DebugPrint("btnfont: TTF_OpenFont fail : %s\n", SDL_GetError());
+        return;
+    }
+    TTF_SetFontStyle(s_btnFont, TTF_STYLE_BOLD);
+
+    const char *labels[6] = {"ESC", "Z", "S", "X", "<", ">"};
+    SDL_Color white = {255, 255, 255, 255};
+
+    for (i32 i = 0; i < 6; i++)
+    {
+        SDL_Surface *surf = TTF_RenderText_Blended(s_btnFont, labels[i], 0, white);
+        if (surf == nullptr)
+        {
+            continue;
+        }
+
+        SDL_Surface *rgba = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGBA32);
+        if (rgba != nullptr)
+        {
+            SDL_DestroySurface(surf);
+            surf = rgba;
+        }
+
+        glGenTextures(1, &s_btnLabelTex[i]);
+        glBindTexture(GL_TEXTURE_2D, s_btnLabelTex[i]);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, surf->w, surf->h, 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, surf->pixels);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        s_btnLabelW[i] = surf->w;
+        s_btnLabelH[i] = surf->h;
+        SDL_DestroySurface(surf);
+    }
+
+    TTF_CloseFont(s_btnFont);
+    s_btnFont = nullptr;
+}
+
+void GlesGraphics::DrawButtonLabels(const TouchButtons::ButtonInfo *buttons, i32 count,
+                                    i32 rw, i32 offsetX, i32 offsetY, i32 scaledH)
+{
+    EnsureButtonFont();
+
+    glUniform1i(this->btn_u_UseTex, 1);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1i(this->btn_u_Tex, 0);
+
+    f32 yScale = (f32)scaledH / 480.0f;
+
+    for (i32 i = 0; i < count; i++)
+    {
+        i32 ti = LabelToTexIndex(buttons[i].label);
+        if (ti < 0 || s_btnLabelTex[ti] == 0)
+        {
+            continue;
+        }
+
+        f32 sy = offsetY + (buttons[i].gameY / 480.0f) * scaledH;
+        f32 sr = buttons[i].gameRadius * yScale;
+        f32 sx;
+        if (buttons[i].anchor == TouchButtons::Anchor::RightPillar)
+        {
+            sx = (f32)(rw) - offsetX + sr;
+        }
+        else
+        {
+            sx = (f32)offsetX - sr;
+        }
+
+        // Text height ~ 90% of the button radius; keep aspect from the texture.
+        f32 th = sr * 0.9f;
+        f32 tw = th * (f32)s_btnLabelW[ti] / (f32)s_btnLabelH[ti];
+
+        f32 x0 = sx - tw * 0.5f;
+        f32 y0 = sy - th * 0.5f;
+        f32 x1 = x0 + tw;
+        f32 y1 = y0 + th;
+
+        // pos(2) color(4) uv(2)
+        f32 verts[4 * 8];
+        f32 *v = verts;
+        // top-left, top-right, bottom-left, bottom-right (triangle strip)
+        v[0] = x0; v[1] = y0; v[2] = 1; v[3] = 1; v[4] = 1; v[5] = 1; v[6] = 0; v[7] = 0;
+        v += 8;
+        v[0] = x1; v[1] = y0; v[2] = 1; v[3] = 1; v[4] = 1; v[5] = 1; v[6] = 1; v[7] = 0;
+        v += 8;
+        v[0] = x0; v[1] = y1; v[2] = 1; v[3] = 1; v[4] = 1; v[5] = 1; v[6] = 0; v[7] = 1;
+        v += 8;
+        v[0] = x1; v[1] = y1; v[2] = 1; v[3] = 1; v[4] = 1; v[5] = 1; v[6] = 1; v[7] = 1;
+
+        glBindTexture(GL_TEXTURE_2D, s_btnLabelTex[ti]);
+        glBufferData(GL_ARRAY_BUFFER, 4 * 8 * sizeof(f32), verts, GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+}
+
+void GlesGraphics::DrawScreenSpaceButtons()
+{
+    TouchButtons::ButtonInfo buttons[8];
+    i32 count = TouchButtons::GetButtonInfo(buttons, 8);
+    if (count == 0 || this->btnShaderProgram == 0)
+    {
+        return;
+    }
+
+    i32 rw, rh;
+    SDL_GetWindowSizeInPixels(g_GameWindow.window, &rw, &rh);
+    if (rw <= 0 || rh <= 0)
+    {
+        return;
+    }
+
+    // Pillarbox layout (same math as SwapBuffers).
+    f32 targetAspect = 640.0f / 480.0f;
+    f32 windowAspect = (f32)rw / (f32)rh;
+    i32 scaledW, scaledH, offsetX, offsetY;
+    if (windowAspect > targetAspect)
+    {
+        scaledH = rh;
+        scaledW = (i32)(scaledH * targetAspect);
+        offsetX = (rw - scaledW) / 2;
+        offsetY = 0;
+    }
+    else
+    {
+        scaledW = rw;
+        scaledH = (i32)(scaledW / targetAspect);
+        offsetX = 0;
+        offsetY = (rh - scaledH) / 2;
+    }
+
+    // Need at least some black border for the pillarbox buttons.
+    if (offsetX < 8)
+    {
+        return;
+    }
+
+    // ---- save GL state ----
+    GLint savedViewport[4];
+    glGetIntegerv(GL_VIEWPORT, savedViewport);
+    GLboolean savedScissorTest = glIsEnabled(GL_SCISSOR_TEST);
+    GLint savedScissorBox[4];
+    glGetIntegerv(GL_SCISSOR_BOX, savedScissorBox);
+    GLboolean savedBlend = glIsEnabled(GL_BLEND);
+    GLint savedBlendSrc, savedBlendDst;
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &savedBlendSrc);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &savedBlendDst);
+    GLboolean savedDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean savedCullFace = glIsEnabled(GL_CULL_FACE);
+    GLboolean savedDepthMask;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &savedDepthMask);
+    GLint savedProgram;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &savedProgram);
+    GLint savedVao;
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &savedVao);
+    GLint savedActiveTexture;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTexture);
+    GLint savedTexture;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture);
+
+    // ---- setup ----
+    glViewport(0, 0, rw, rh);
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE);
+
+    glUseProgram(this->btnShaderProgram);
+    glUniform2f(this->btn_u_ScreenSize, (f32)rw, (f32)rh);
+    glUniform1i(this->btn_u_UseTex, 0);
+
+    glBindVertexArray(this->btnVao);
+    glBindBuffer(GL_ARRAY_BUFFER, this->btnVbo);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(f32), (const void *)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 8 * sizeof(f32), (const void *)(2 * sizeof(f32)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(f32), (const void *)(6 * sizeof(f32)));
+
+    constexpr i32 kHalfSegs = 16;
+    constexpr f32 kBorderW = 2.0f;
+    constexpr f32 kPi = 3.14159265358979323846f;
+    f32 yScale = (f32)scaledH / 480.0f;
+    f32 verts[33 * 2 * 8]; // border ring max: (32+1)*2 verts
+
+    for (i32 i = 0; i < count; i++)
+    {
+        f32 sy = offsetY + (buttons[i].gameY / 480.0f) * scaledH;
+        f32 sr = buttons[i].gameRadius * yScale;
+        f32 sx;
+        if (buttons[i].anchor == TouchButtons::Anchor::RightPillar)
+        {
+            sx = (f32)(rw - offsetX) + sr;
+            if (sx > (f32)rw - sr)
+            {
+                sx = (f32)rw - sr;
+            }
+        }
+        else
+        {
+            sx = (f32)offsetX - sr;
+            if (sx < sr)
+            {
+                sx = sr;
+            }
+        }
+
+        // Filled circle (horizontal band triangle strip).
+        {
+            i32 nv = (kHalfSegs + 1) * 2;
+            for (i32 j = 0; j <= kHalfSegs; j++)
+            {
+                f32 ang = kPi * 0.5f - j * kPi / (f32)kHalfSegs;
+                f32 ca = cosf(ang), sa = sinf(ang);
+                f32 *L = verts + (j * 2) * 8;
+                L[0] = sx - sr * ca; L[1] = sy - sr * sa;
+                L[2] = buttons[i].fillR; L[3] = buttons[i].fillG;
+                L[4] = buttons[i].fillB; L[5] = buttons[i].fillA;
+                L[6] = 0; L[7] = 0;
+                f32 *R = verts + (j * 2 + 1) * 8;
+                R[0] = sx + sr * ca; R[1] = sy - sr * sa;
+                R[2] = buttons[i].fillR; R[3] = buttons[i].fillG;
+                R[4] = buttons[i].fillB; R[5] = buttons[i].fillA;
+                R[6] = 0; R[7] = 0;
+            }
+            glBufferData(GL_ARRAY_BUFFER, nv * 8 * sizeof(f32), verts, GL_STREAM_DRAW);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, nv);
+        }
+
+        // Border ring.
+        {
+            i32 segs = kHalfSegs * 2;
+            i32 nv = (segs + 1) * 2;
+            f32 innerR = sr - kBorderW;
+            if (innerR < 1.0f)
+            {
+                innerR = 1.0f;
+            }
+            for (i32 j = 0; j <= segs; j++)
+            {
+                f32 ang = j * 2.0f * kPi / (f32)segs;
+                f32 ca = cosf(ang), sa = sinf(ang);
+                f32 *O = verts + (j * 2) * 8;
+                O[0] = sx + sr * ca; O[1] = sy + sr * sa;
+                O[2] = buttons[i].borderR; O[3] = buttons[i].borderG;
+                O[4] = buttons[i].borderB; O[5] = buttons[i].borderA;
+                O[6] = 0; O[7] = 0;
+                f32 *I = verts + (j * 2 + 1) * 8;
+                I[0] = sx + innerR * ca; I[1] = sy + innerR * sa;
+                I[2] = buttons[i].borderR; I[3] = buttons[i].borderG;
+                I[4] = buttons[i].borderB; I[5] = buttons[i].borderA;
+                I[6] = 0; I[7] = 0;
+            }
+            glBufferData(GL_ARRAY_BUFFER, nv * 8 * sizeof(f32), verts, GL_STREAM_DRAW);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, nv);
+        }
+    }
+
+    DrawButtonLabels(buttons, count, rw, offsetX, offsetY, scaledH);
+
+    // ---- restore GL state ----
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glUseProgram(savedProgram);
+    glActiveTexture(savedActiveTexture);
+    glBindTexture(GL_TEXTURE_2D, savedTexture);
+    glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
+    if (savedScissorTest)
+    {
+        glEnable(GL_SCISSOR_TEST);
+    }
+    else
+    {
+        glDisable(GL_SCISSOR_TEST);
+    }
+    glScissor(savedScissorBox[0], savedScissorBox[1], savedScissorBox[2], savedScissorBox[3]);
+    if (savedBlend)
+    {
+        glEnable(GL_BLEND);
+    }
+    else
+    {
+        glDisable(GL_BLEND);
+    }
+    glBlendFunc(savedBlendSrc, savedBlendDst);
+    if (savedDepthTest)
+    {
+        glEnable(GL_DEPTH_TEST);
+    }
+    else
+    {
+        glDisable(GL_DEPTH_TEST);
+    }
+    if (savedCullFace)
+    {
+        glEnable(GL_CULL_FACE);
+    }
+    else
+    {
+        glDisable(GL_CULL_FACE);
+    }
+    glDepthMask(savedDepthMask);
+}
+
 void GlesGraphics::SwapBuffers()
 {
     i32 drawableWidth, drawableHeight;
@@ -956,6 +1368,8 @@ void GlesGraphics::SwapBuffers()
     glBindVertexArray(this->blitVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glBindVertexArray(0);
+
+    DrawScreenSpaceButtons();
 
 #if defined(__APPLE__) && TARGET_OS_IPHONE
     glBindRenderbuffer(

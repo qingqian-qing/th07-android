@@ -16,6 +16,7 @@
 #include <SDL3/SDL_video.h>
 
 #include "AnmManager.hpp"
+#include "TouchButtons.hpp"
 #include "ZunGraphics.hpp"
 
 struct CachedState
@@ -128,6 +129,15 @@ class GlesGraphics : public ZunGraphics
     GLuint unitQuadVao = 0;
     GLuint unitQuadVbo = 0;
 
+    // Screen-space virtual button overlay (independent of the game shader,
+    // no ImGui). Used by DrawScreenSpaceButtons() inside SwapBuffers().
+    GLuint btnShaderProgram = 0;
+    GLuint btnVao = 0;
+    GLuint btnVbo = 0;
+    GLint btn_u_ScreenSize = -1;
+    GLint btn_u_Tex = -1;
+    GLint btn_u_UseTex = -1;
+
     ZunMatrix transforms[4];
     ZunViewport viewport;
     bool fogEnabled = false;
@@ -151,6 +161,10 @@ class GlesGraphics : public ZunGraphics
     CachedState stateCache;
 
     u64 prevTicks = 0;
+
+    void DrawScreenSpaceButtons();
+    void DrawButtonLabels(const TouchButtons::ButtonInfo *buttons, i32 count, i32 rw,
+                          i32 offsetX, i32 offsetY, i32 scaledH);
 
     void Flush()
     {

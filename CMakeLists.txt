@@ -40,6 +40,7 @@ set(SOURCES
     src/Supervisor.cpp
     src/TextHelper.cpp
     src/Touch.cpp
+    src/TouchButtons.cpp
     src/main.cpp
     src/graphics/Gles.cpp
     src/pbg4/Lzss.cpp
