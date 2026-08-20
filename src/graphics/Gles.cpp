@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <vector>
 
 #include "AnmManager.hpp"
 #include "FileSystem.hpp"
@@ -1001,11 +1002,20 @@ static void EnsureButtonFont()
     }
 
     // Prefer the bundled simplified-Chinese font (APK assets); fall back to
-    // msgothic.ttc in the external data dir.
-    SDL_IOStream *nsIo = SDL_IOFromFile("NotoSansSC-Regular.otf", "rb");
-    if (nsIo)
+    // Bundled simplified-Chinese font loaded fully into memory (assets IO
+    // can't be seeked reliably), fallback to msgothic.ttc externally.
+    static std::vector<u8> s_fontData;
+    size_t fsize = 0;
+    void *fdata = SDL_LoadFile("NotoSansSC-Regular.otf", &fsize);
+    if (fdata && fsize > 0)
     {
-        s_btnFont = TTF_OpenFontIO(nsIo, true, 48);
+        s_fontData.assign((u8 *)fdata, (u8 *)fdata + fsize);
+        SDL_free(fdata);
+        SDL_IOStream *mem = SDL_IOFromConstMem(s_fontData.data(), s_fontData.size());
+        if (mem)
+        {
+            s_btnFont = TTF_OpenFontIO(mem, true, 48);
+        }
     }
     if (!s_btnFont)
     {
