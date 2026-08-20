@@ -16,6 +16,7 @@ set(SOURCES
     src/BulletManager.cpp
     src/Chain.cpp
     src/Controller.cpp
+    src/CrashHandler.cpp
     src/EclManager.cpp
     src/EffectManager.cpp
     src/Ending.cpp

@@ -8,6 +8,7 @@
 #include "AnmManager.hpp"
 #include "Chain.hpp"
 #include "Controller.hpp"
+#include "CrashHandler.hpp"
 #include "FileSystem.hpp"
 #include "GameErrorContext.hpp"
 #include "GameManager.hpp"
@@ -36,6 +37,7 @@ void AnmManager::TakeScreenshotIfRequested()
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 {
+    CrashHandler_Init();
     if (g_Supervisor.LoadConfig("th07.cfg") != ZUN_SUCCESS)
     {
         return SDL_APP_FAILURE;
