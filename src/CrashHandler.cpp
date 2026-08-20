@@ -5,8 +5,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include <execinfo.h>
-
 #include "FileSystem.hpp"
 
 static void WriteCrash(int sig, const char *name)
@@ -15,25 +13,16 @@ static void WriteCrash(int sig, const char *name)
     if (f)
     {
         fprintf(f, "===== CRASH: %s (sig %d) =====\n", name, sig);
-        fflush(f);
-    }
-
-    void *bt[64];
-    int n = backtrace(bt, 64);
-    char **symbols = backtrace_symbols(bt, n);
-    if (f)
-    {
-        for (int i = 0; i < n; i++)
+        fprintf(f, "  #00 %p\n", __builtin_return_address(0));
+        for (int i = 1; i < 20; i++)
         {
-            fprintf(f, "  #%02d %s\n", i, symbols ? symbols[i] : "?");
+            void *ra = __builtin_return_address(i);
+            if (!ra)
+                break;
+            fprintf(f, "  #%02d %p\n", i, ra);
         }
         fclose(f);
     }
-    if (symbols)
-    {
-        free(symbols);
-    }
-
     _exit(1);
 }
 
