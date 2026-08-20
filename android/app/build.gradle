@@ -18,6 +18,7 @@ android {
                 arguments "APP_PLATFORM=android-21"
                 // abiFilters 'arm64-v8a'
                 abiFilters 'arm64-v8a'
+            }
             cmake {
                 if (project.hasProperty('TH_EXTERNAL_ASSETS')) {
                     arguments "-DANDROID_PLATFORM=android-21", "-DANDROID_STL=c++_static", "-DTH_EXTERNAL_ASSETS=ON"
@@ -41,6 +42,7 @@ android {
     if (!project.hasProperty('EXCLUDE_NATIVE_LIBS')) {
         sourceSets.main {
             jniLibs.srcDir 'libs'
+            // Always bundle assets/ (UI font) even in TH_EXTERNAL_ASSETS mode.
             assets.srcDirs = ['../../assets']
         }
         externalNativeBuild {
