@@ -933,6 +933,15 @@ ZunResult Supervisor::LoadConfig(const char *configFilename)
         }
         g_ControllerMapping = g_Supervisor.cfg.controllerMapping;
     }
+    // Force WAV music whenever thbgm.dat exists (bundled BGM is the WAV format).
+    // The saved config may have musicMode = OFF/MIDI from a previous run, which
+    // would leave the game silent on Android (no MIDI synth).
+    bgm2 = SDL_IOFromFile(FileSystem::GetBasePath("thbgm.dat").c_str(), "rb");
+    if (bgm2)
+    {
+        SDL_CloseIO(bgm2);
+        g_Supervisor.cfg.musicMode = MUSIC_WAV;
+    }
     g_Supervisor.cfg.loaded = 1;
     if (this->cfg.noVertexBuffers)
     {
