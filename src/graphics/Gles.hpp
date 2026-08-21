@@ -119,7 +119,7 @@ class GlesGraphics : public ZunGraphics
     ColorOp colorOpRgb = COLOR_OP_MODULATE;
     ColorOp colorOpAlpha = COLOR_OP_MODULATE;
 
-    static constexpr size_t VBO_CAPACITY = 1024 * 1024;
+    static constexpr size_t VBO_CAPACITY = 4 * 1024 * 1024;
     size_t vboOffset = 0;
 
     GLuint defaultFbo = 0;
