@@ -1113,7 +1113,8 @@ ZunResult ResultScreen::HandleResultKeyboard()
             this->curScore.stage = 99;
         }
         this->curScore.base.isPlayerScore = 1;
-        strcpy(this->curScore.name, this->lsnmHeader.name);
+        strncpy(this->curScore.name, this->lsnmHeader.name, sizeof(this->curScore.name) - 1);
+        this->curScore.name[sizeof(this->curScore.name) - 1] = '\0';
         GetDate(this->curScore.date);
         slowRateFactor =
             (g_Supervisor.framerateMultiplier / g_Supervisor.fpsAccumulator - 0.5f) * 2.0f;
@@ -1250,7 +1251,8 @@ ZunResult ResultScreen::HandleResultKeyboard()
         {
             vm->pendingInterrupt = 2;
         }
-        strcpy(this->replayName, this->curScore.name);
+        strncpy(this->replayName, this->curScore.name, sizeof(this->replayName) - 1);
+        this->replayName[sizeof(this->replayName) - 1] = '\0';
         strcpy(this->lsnmHeader.name, this->replayName);
     }
     return ZUN_SUCCESS;
@@ -2477,7 +2479,8 @@ ZunResult ResultScreen::AddedCallback(ResultScreen *arg)
                 .score = g_GameManager.globals->score;
         }
         arg->resultScreenState = 11;
-        strcpy(arg->replayName, arg->lsnmHeader.name);
+        strncpy(arg->replayName, arg->lsnmHeader.name, sizeof(arg->replayName) - 1);
+        arg->replayName[sizeof(arg->replayName) - 1] = '\0';
     }
     for (i = 0; i < 7; i++)
     {
